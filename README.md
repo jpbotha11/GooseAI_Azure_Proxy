@@ -1,130 +1,238 @@
-# Goose + Azure OpenAI Proxy
+﻿# Docker Setup for Azure Proxies
 
-This is a lightweight **OpenAI-compatible proxy** that allows Goose AI to communicate with **Azure OpenAI deployments**. It handles the differences between Azure and OpenAI endpoints, making Goose work without modification.  
+Run both Azure OpenAI and Azure AI Foundry proxies in Docker containers.
 
----
+## Quick Start
 
-## Features
+### 1. Create .env file
 
-- `/v1/models` endpoint (fake model list for Goose)  
-- `/v1/chat/completions` endpoint forwarding requests to Azure  
-- Automatically injects `api-version` and routes to the correct Azure deployment  
-- Removes incompatible fields like `stream_options` when streaming is disabled  
-- Fully local and configurable via environment variables  
-
----
-
-## Requirements
-
-- Python 3.10+  
-- `pip` for installing dependencies  
-
-Python packages:
+Copy the example and fill in your credentials:
 
 ```bash
-pip install fastapi uvicorn requests
+cp .env.docker.example .env
 ```
 
----
+Edit `.env` with your actual credentials:
 
-## Setup
+```env
+# Azure OpenAI
+AZURE_OPENAI_API_KEY=your-actual-key
+AZURE_OPENAI_BASE_URL=https://your-resource.openai.azure.com
+AZURE_DEPLOYMENT_NAME=gpt-4o
 
-1. **Clone the repository or copy the proxy file**
+# Azure AI Foundry
+AZURE_AI_API_KEY=your-actual-key
+AZURE_AI_ENDPOINT=https://your-resource.cognitiveservices.azure.com
+DEFAULT_AI_MODEL=gpt-5
+
+# Rate limiting (optional)
+RATE_LIMIT_DELAY=3
+```
+
+### 2. Build and Start
 
 ```bash
-git clone <repo-url>
-cd <repo-folder>
+# Build and start both proxies
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
 ```
 
-2. **Set environment variables** (replace with your values)
-
-**Windows PowerShell:**
-
-```powershell
-$env:AZURE_OPENAI_API_KEY="YOUR_AZURE_KEY"
-$env:AZURE_OPENAI_BASE_URL="https://<resource>.openai.azure.com"
-$env:AZURE_API_VERSION="2024-02-15-preview"
-$env:AZURE_DEPLOYMENT_NAME="gpt-4.1"
-```
-
-**Linux / macOS:**
+### 3. Test
 
 ```bash
-export AZURE_OPENAI_API_KEY="YOUR_AZURE_KEY"
-export AZURE_OPENAI_BASE_URL="https://<resource>.openai.azure.com"
-export AZURE_API_VERSION="2024-02-15-preview"
-export AZURE_DEPLOYMENT_NAME="gpt-4.1"
+# Test Azure OpenAI proxy
+curl http://localhost:8000/v1/models
+
+# Test Azure AI Foundry proxy
+curl http://localhost:8001/v1/models
 ```
 
-> **Important:** Do not include `/openai` in `AZURE_OPENAI_BASE_URL`.
+## Docker Commands
 
----
-
-## Running the Proxy
-
-Run the proxy locally using Uvicorn:
-
+### Start Services
 ```bash
-uvicorn azure_openai_proxy:app --host 127.0.0.1 --port 8000
+# Start both proxies
+docker-compose up -d
+
+# Start only one proxy
+docker-compose up -d azure-openai-proxy
+docker-compose up -d azure-ai-proxy
 ```
 
-- Default URL: `http://127.0.0.1:8000`  
-- The server listens only locally by default.
-
----
-
-## Configure Goose AI
-
-Set Goose’s OpenAI connection to use the proxy:
-
-```powershell
-$env:OPENAI_API_KEY="dummy-key"
-$env:OPENAI_API_BASE="http://127.0.0.1:8000"
-$env:OPENAI_MODEL="<AZURE_DEPLOYMENT_NAME>"
-```
-
-- `OPENAI_MODEL` must be your **Azure deployment name**  
-- The API key can be any value (the proxy ignores it)
-
----
-
-## Testing the Proxy
-
-**Test models endpoint:**
-
+### View Logs
 ```bash
-curl http://127.0.0.1:8000/v1/models
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f azure-openai-proxy
+docker-compose logs -f azure-ai-proxy
 ```
 
-**Test chat completions endpoint:**
-
+### Stop Services
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/chat/completions \
--H "Content-Type: application/json" \
--d '{"model":"<AZURE_DEPLOYMENT_NAME>","messages":[{"role":"user","content":"Hello"}]}'
+# Stop all
+docker-compose down
+
+# Stop specific service
+docker-compose stop azure-openai-proxy
+docker-compose stop azure-ai-proxy
 ```
 
----
+### Restart Services
+```bash
+# Restart all
+docker-compose restart
 
-## Security Notes
+# Restart specific service
+docker-compose restart azure-openai-proxy
+docker-compose restart azure-ai-proxy
+```
 
-- Do not expose this proxy publicly without authentication.  
-- Keep it bound to `127.0.0.1` for local use.  
-- Never commit your API keys to source control.  
-- CORS is open (`*`) for local development; lock it down if exposed publicly.
+### Rebuild After Code Changes
+```bash
+# Rebuild and restart
+docker-compose up -d --build
+```
 
----
+## Service URLs
 
-## Optional Enhancements
+Once running, the proxies are available at:
 
-- Support **streaming responses**  
-- Add **Responses API** or embeddings endpoints  
-- Dockerize the proxy for deployment  
-- Add **token-based authentication** for remote access
+- **Azure OpenAI Proxy**: http://localhost:8000
+- **Azure AI Foundry Proxy**: http://localhost:8001
 
----
+## Configuration
 
-## License
+### Environment Variables
 
-MIT License — free to use, modify, and distribute.
+All configuration is done via the `.env` file. See `.env.docker.example` for all options.
 
+### Rate Limiting
+
+To add rate limiting to Azure AI Foundry proxy:
+
+```env
+RATE_LIMIT_DELAY=3      # 3 seconds between requests
+RATE_LIMIT_RPM=10       # Max 10 requests per minute
+RATE_LIMIT_TPM=40000    # Max 40k tokens per minute
+```
+
+### Port Changes
+
+To use different ports, edit `docker-compose.yml`:
+
+```yaml
+ports:
+  - "9000:8000"  # Maps external port 9000 to internal 8000
+```
+
+## Health Checks
+
+Both services include health checks:
+
+- Azure OpenAI: `http://localhost:8000/v1/models`
+- Azure AI Foundry: `http://localhost:8001/health`
+
+Check service health:
+```bash
+docker-compose ps
+```
+
+## Troubleshooting
+
+### View Container Logs
+```bash
+docker-compose logs -f azure-openai-proxy
+docker-compose logs -f azure-ai-proxy
+```
+
+### Check if Containers are Running
+```bash
+docker-compose ps
+```
+
+### Test from Inside Container
+```bash
+docker exec -it azure-openai-proxy curl http://localhost:8000/v1/models
+docker exec -it azure-ai-foundry-proxy curl http://localhost:8001/health
+```
+
+### Environment Variable Issues
+```bash
+# Check what env vars are set in container
+docker-compose exec azure-openai-proxy env | grep AZURE
+docker-compose exec azure-ai-proxy env | grep AZURE
+```
+
+### Rebuild from Scratch
+```bash
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+## Using with Goose
+
+Point Goose to the Docker containers:
+
+### Azure OpenAI
+```bash
+export OPENAI_API_BASE=http://localhost:8000/v1
+export OPENAI_API_KEY=dummy
+```
+
+### Azure AI Foundry
+```bash
+export OPENAI_API_BASE=http://localhost:8001/v1
+export OPENAI_API_KEY=dummy
+```
+
+## Production Deployment
+
+For production:
+
+1. **Use secrets management** instead of `.env` file
+2. **Add authentication** to proxy endpoints
+3. **Use a reverse proxy** (nginx, traefik)
+4. **Enable logging** to external system
+5. **Set resource limits** in docker-compose.yml:
+
+```yaml
+services:
+  azure-openai-proxy:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+```
+
+## Files Structure
+
+```
+.
+├── Dockerfile                    # Container image definition
+├── docker-compose.yml           # Service orchestration
+├── .env                        # Your credentials (gitignored)
+├── .env.docker.example         # Example configuration
+├── azure_openai_proxy.py       # Azure OpenAI proxy code
+├── azure_ai_proxy.py           # Azure AI Foundry proxy code
+└── requirements.txt            # Python dependencies
+```
+
+## Network
+
+Both containers are on the same Docker network (`azure-proxy-network`), allowing them to communicate if needed.
+
+To access from another container:
+- `http://azure-openai-proxy:8000`
+- `http://azure-ai-foundry-proxy:8001`

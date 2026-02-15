@@ -8,3 +8,4 @@
 /.vs
 /Goose_AI_Proxy/.vs/Goose_AI_Proxy
 /__pycache__/azure_openai_proxy.cpython-311.pyc
+/Goose_AI_Proxy/.env.example

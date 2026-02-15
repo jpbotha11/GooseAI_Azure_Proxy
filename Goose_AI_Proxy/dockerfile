@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy proxy files
+COPY azure_openai_proxy.py .
+COPY azure_ai_proxy.py .
+
+# Copy .env file if it exists (optional, can use docker-compose env vars instead)
+COPY .env* ./
+
+# Expose ports
+EXPOSE 8000 8001
+
+# Default command (can be overridden in docker-compose)
+CMD ["python", "azure_openai_proxy.py"]

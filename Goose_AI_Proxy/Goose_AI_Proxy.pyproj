@@ -29,7 +29,9 @@
     <InterpreterReference Include="CondaEnv|CondaEnv|proxy" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include=".env.example" />
+    <Content Include=".env.docker" />
+    <Content Include="dockerfile" />
+    <Content Include="requirements.txt" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

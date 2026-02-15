@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  azure-openai-proxy:
+    build: .
+    container_name: azure-openai-proxy
+    ports:
+      - "8000:8000"
+    environment:
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_BASE_URL=${AZURE_OPENAI_BASE_URL}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-15-preview}
+      - AZURE_DEPLOYMENT_NAME=${AZURE_DEPLOYMENT_NAME:-gpt-4.1}
+    command: uvicorn azure_openai_proxy:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  azure-ai-proxy:
+    build: .
+    container_name: azure-ai-foundry-proxy
+    ports:
+      - "8001:8001"
+    environment:
+      - AZURE_AI_API_KEY=${AZURE_AI_API_KEY}
+      - AZURE_AI_ENDPOINT=${AZURE_AI_ENDPOINT}
+      - AZURE_AI_API_VERSION=${AZURE_AI_API_VERSION:-2024-05-01-preview}
+      - DEFAULT_AI_MODEL=${DEFAULT_AI_MODEL:-gpt-5}
+      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-0}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-0}
+      - RATE_LIMIT_TPM=${RATE_LIMIT_TPM:-0}
+    command: uvicorn azure_ai_proxy:app --host 0.0.0.0 --port 8001
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  default:
+    name: azure-proxy-network

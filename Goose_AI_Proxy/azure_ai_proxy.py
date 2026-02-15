@@ -3,6 +3,9 @@ import json
 import uuid
 import logging
 import requests
+import time
+from collections import deque
+from threading import Lock
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
@@ -32,14 +35,125 @@ logger = logging.getLogger("azure-ai-foundry-proxy")
 # Azure AI Foundry uses either API key or managed identity
 AZURE_AI_API_KEY = os.environ["AZURE_AI_API_KEY"]
 AZURE_AI_ENDPOINT = os.environ["AZURE_AI_ENDPOINT"]
-# Example: https://your-ai-project.region.inference.ml.azure.com
+# Example: https://your-resource.cognitiveservices.azure.com
+
+# API version for Azure OpenAI style endpoints
+AZURE_AI_API_VERSION = os.environ.get("AZURE_AI_API_VERSION", "2024-05-01-preview")
 
 # Default model if not specified
 DEFAULT_MODEL = os.environ.get("DEFAULT_AI_MODEL", "gpt-5")
 
+# Rate limiting configuration
+RATE_LIMIT_DELAY = float(os.environ.get("RATE_LIMIT_DELAY", "0"))  # Seconds between requests (0 = disabled)
+RATE_LIMIT_RPM = int(os.environ.get("RATE_LIMIT_RPM", "0"))  # Requests per minute (0 = disabled)
+RATE_LIMIT_TPM = int(os.environ.get("RATE_LIMIT_TPM", "0"))  # Tokens per minute (0 = disabled)
+
 logger.debug("Azure AI Foundry proxy configuration loaded")
 logger.debug("AZURE_AI_ENDPOINT=%s", AZURE_AI_ENDPOINT)
+logger.debug("AZURE_AI_API_VERSION=%s", AZURE_AI_API_VERSION)
 logger.debug("DEFAULT_MODEL=%s", DEFAULT_MODEL)
+logger.debug("RATE_LIMIT_DELAY=%s seconds", RATE_LIMIT_DELAY)
+logger.debug("RATE_LIMIT_RPM=%s", RATE_LIMIT_RPM if RATE_LIMIT_RPM > 0 else "disabled")
+logger.debug("RATE_LIMIT_TPM=%s", RATE_LIMIT_TPM if RATE_LIMIT_TPM > 0 else "disabled")
+
+# =========================
+# Rate Limiter
+# =========================
+
+class RateLimiter:
+    """Simple rate limiter with RPM and TPM tracking."""
+    
+    def __init__(self, rpm=0, tpm=0, delay=0):
+        self.rpm = rpm  # Requests per minute
+        self.tpm = tpm  # Tokens per minute
+        self.delay = delay  # Fixed delay between requests
+        
+        self.request_times = deque()
+        self.token_usage = deque()
+        self.lock = Lock()
+        self.last_request_time = 0
+        
+    def estimate_tokens(self, payload: dict) -> int:
+        """Rough token estimation (4 chars ≈ 1 token)."""
+        messages = payload.get("messages", [])
+        text = json.dumps(messages)
+        estimated = len(text) // 4
+        
+        # Add output tokens estimate
+        max_tokens = payload.get("max_tokens", 1000)
+        estimated += max_tokens
+        
+        return estimated
+    
+    def wait_if_needed(self, payload: dict):
+        """Block if rate limits would be exceeded."""
+        with self.lock:
+            now = time.time()
+            
+            # Fixed delay between requests
+            if self.delay > 0:
+                time_since_last = now - self.last_request_time
+                if time_since_last < self.delay:
+                    sleep_time = self.delay - time_since_last
+                    logger.info("Rate limit: sleeping %.2f seconds", sleep_time)
+                    time.sleep(sleep_time)
+                    now = time.time()
+            
+            # Clean old entries (older than 60 seconds)
+            cutoff = now - 60
+            while self.request_times and self.request_times[0] < cutoff:
+                self.request_times.popleft()
+            while self.token_usage and self.token_usage[0][0] < cutoff:
+                self.token_usage.popleft()
+            
+            # Check RPM limit
+            if self.rpm > 0:
+                if len(self.request_times) >= self.rpm:
+                    # Wait until oldest request falls out of window
+                    sleep_time = 60 - (now - self.request_times[0])
+                    if sleep_time > 0:
+                        logger.info("RPM limit: sleeping %.2f seconds", sleep_time)
+                        time.sleep(sleep_time)
+                        now = time.time()
+                        # Clean again after sleep
+                        cutoff = now - 60
+                        while self.request_times and self.request_times[0] < cutoff:
+                            self.request_times.popleft()
+            
+            # Check TPM limit
+            if self.tpm > 0:
+                estimated_tokens = self.estimate_tokens(payload)
+                current_tokens = sum(tokens for _, tokens in self.token_usage)
+                
+                if current_tokens + estimated_tokens > self.tpm:
+                    # Wait until we have enough token budget
+                    if self.token_usage:  # Make sure we have entries
+                        sleep_time = 60 - (now - self.token_usage[0][0])
+                        if sleep_time > 0:
+                            logger.info(
+                                "TPM limit: sleeping %.2f seconds (current: %d, estimated: %d, limit: %d)",
+                                sleep_time, current_tokens, estimated_tokens, self.tpm
+                            )
+                            time.sleep(sleep_time)
+                            now = time.time()
+                            # Clean again after sleep
+                            cutoff = now - 60
+                            while self.token_usage and self.token_usage[0][0] < cutoff:
+                                self.token_usage.popleft()
+                
+                # Record token usage
+                self.token_usage.append((now, estimated_tokens))
+            
+            # Record request
+            self.request_times.append(now)
+            self.last_request_time = now
+
+# Initialize rate limiter
+rate_limiter = RateLimiter(
+    rpm=RATE_LIMIT_RPM,
+    tpm=RATE_LIMIT_TPM,
+    delay=RATE_LIMIT_DELAY
+)
 
 # =========================
 # FastAPI app
@@ -78,7 +192,7 @@ async def models():
     return {
         "object": "list",
         "data": [
-            {"id": "gpt-5", "object": "model", "owned_by": "azure-ai"},
+            {"id": "gpt-5.2-chat", "object": "model", "owned_by": "azure-ai"},
             {"id": "gpt-4o", "object": "model", "owned_by": "azure-ai"},
             {"id": "gpt-4o-mini", "object": "model", "owned_by": "azure-ai"},
             {"id": "o1-preview", "object": "model", "owned_by": "azure-ai"},
@@ -117,12 +231,17 @@ async def chat_completions(request: Request):
         json.dumps(scrub(body), indent=2),
     )
 
+    # Apply rate limiting
+    rate_limiter.wait_if_needed(body)
+
     model = body.get("model", DEFAULT_MODEL)
+    #model = DEFAULT_MODEL
     
     logger.debug("[%s] Using model: %s", req_id, model)
 
-    # Azure AI GitHub Models endpoint
-    azure_ai_url = f"{AZURE_AI_ENDPOINT}"
+    # Azure AI Foundry endpoint (Azure OpenAI style)
+    # Format: https://xxx-resource.cognitiveservices.azure.com/openai/deployments/{model}/chat/completions?api-version={version}
+    azure_ai_url = f"{AZURE_AI_ENDPOINT}/openai/deployments/{model}/chat/completions?api-version={AZURE_AI_API_VERSION}"
 
     logger.debug("[%s] Azure AI URL: %s", req_id, azure_ai_url)
 
@@ -220,5 +339,5 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))  # Different default port from OpenAI proxy
+    port = int(os.environ.get("PORT", 8001))  # Different default port from OpenAI proxy
     uvicorn.run(app, host="0.0.0.0", port=port)
