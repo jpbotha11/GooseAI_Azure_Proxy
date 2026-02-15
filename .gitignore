@@ -1,0 +1,10 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs/GooseAI_Azure_Proxy/CopilotIndices/17.14.1584.41681
+/.vs/GooseAI_Azure_Proxy/FileContentIndex
+/.vs/GooseAI_Azure_Proxy/v17
+/.vs
+/Goose_AI_Proxy/.vs/Goose_AI_Proxy
+/__pycache__/azure_openai_proxy.cpython-311.pyc
